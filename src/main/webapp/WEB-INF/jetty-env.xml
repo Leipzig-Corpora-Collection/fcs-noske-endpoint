@@ -1,0 +1,25 @@
+<!DOCTYPE Configure PUBLIC "-//Jetty//Configure//EN" "https://www.eclipse.org/jetty/configure_10_0.dtd">
+<Configure id="wac" class="org.eclipse.jetty.webapp.WebAppContext">
+    <New class="org.eclipse.jetty.plus.jndi.EnvEntry">
+        <Arg>param/DEFAULT_RESOURCE_PID</Arg>
+        <Arg type="java.lang.String">
+            <Env name="DEFAULT_RESOURCE_PID" default="lcc:deu_typical-mixed_2018" />
+        </Arg>
+        <Arg type="boolean">true</Arg>
+    </New>
+
+    <New class="org.eclipse.jetty.plus.jndi.EnvEntry">
+        <Arg>param/NOSKE_API_URI</Arg>
+        <Arg type="java.lang.String">
+            <Env name="NOSKE_API_URI" default="https://cql.wortschatz-leipzig.de/bonito/run.cgi" />
+        </Arg>
+        <Arg type="boolean">true</Arg>
+    </New>
+    <New class="org.eclipse.jetty.plus.jndi.EnvEntry">
+        <Arg>param/FCS_RESOURCES_FROM_NOSKE</Arg>
+        <Arg type="java.lang.Boolean">
+            <Env name="FCS_RESOURCES_FROM_NOSKE" default="true" />
+        </Arg>
+        <Arg type="boolean">true</Arg>
+    </New>
+</Configure>

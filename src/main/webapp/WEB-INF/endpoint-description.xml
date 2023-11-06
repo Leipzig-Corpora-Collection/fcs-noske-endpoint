@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<EndpointDescription xmlns="http://clarin.eu/fcs/endpoint-description"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://clarin.eu/fcs/endpoint-description ../../resources/Endpoint-Description.xsd"
+    version="2">
+    <Capabilities>
+        <Capability>http://clarin.eu/fcs/capability/basic-search</Capability>
+        <Capability>http://clarin.eu/fcs/capability/advanced-search</Capability>
+    </Capabilities>
+    <SupportedDataViews>
+        <SupportedDataView id="hits" delivery-policy="send-by-default">application/x-clarin-fcs-hits+xml</SupportedDataView>
+        <SupportedDataView id="adv" delivery-policy="send-by-default">application/x-clarin-fcs-adv+xml</SupportedDataView>
+    </SupportedDataViews>
+    <SupportedLayers>
+        <SupportedLayer id="word" result-id="http://wortschatz-leipzig.de/noske/fcs/layer/word">text</SupportedLayer>
+        <SupportedLayer id="lc" result-id="http://wortschatz-leipzig.de/noske/fcs/layer/lc">text</SupportedLayer>
+        <SupportedLayer id="lemma" result-id="http://wortschatz-leipzig.de/noske/fcs/layer/lemma">lemma</SupportedLayer>
+        <SupportedLayer id="lemma_lc" result-id="http://wortschatz-leipzig.de/noske/fcs/layer/lemma_lc">lemma</SupportedLayer>
+        <SupportedLayer id="pos" result-id="http://wortschatz-leipzig.de/noske/fcs/layer/pos">pos</SupportedLayer>
+        <!-- <SupportedLayer id="pos_ud17" result-id="http://wortschatz-leipzig.de/noske/fcs/layer/pos_ud17">pos</SupportedLayer> -->
+    </SupportedLayers>
+    <Resources>
+        <Resource pid="lcc:deu_typical-mixed_2018">
+            <Title xml:lang="en">deu_typical-mixed_2018</Title>
+            <Description xml:lang="en">German mixed corpus based on material from 2018</Description>
+            <LandingPageURI>https://corpora.wortschatz-leipzig.de?corpusId=deu_typical-mixed_2018</LandingPageURI>
+            <Languages>
+                <Language>deu</Language>
+            </Languages>
+            <AvailableDataViews ref="hits adv" />
+            <AvailableLayers ref="word lc pos lemma lemma_lc"/>
+        </Resource>
+    </Resources>
+</EndpointDescription>
