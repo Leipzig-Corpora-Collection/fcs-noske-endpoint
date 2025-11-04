@@ -1,5 +1,6 @@
-package de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint;
+package de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.noske;
 
+import static de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.noske.NoSkeAPI.buildClient;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.net.URI;
@@ -10,14 +11,6 @@ import java.util.Set;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
-import jakarta.json.Json;
-import jakarta.ws.rs.ProcessingException;
-import jakarta.ws.rs.client.Client;
-import jakarta.ws.rs.client.WebTarget;
-import jakarta.ws.rs.core.MediaType;
-import jakarta.ws.rs.core.Response;
-import jakarta.ws.rs.core.UriBuilder;
-
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.junit.jupiter.api.BeforeAll;
@@ -25,20 +18,23 @@ import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import static de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.noske.NoSkeAPI.buildClient;
-
-import de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.noske.NoSkeAPI;
 import de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.noske.pojo.NoSkEConcordanceResponse;
 import de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.noske.pojo.NoSkECorporaResponse;
 import de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.noske.pojo.NoSkECorporaResponse.Corpus;
 import de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.noske.pojo.NoSkECorpusInfoResponse;
 import de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.noske.pojo.NoSkEResponse;
 import de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.noske.pojo.NoSkEViewResponse;
-
-import com.fasterxml.jackson.databind.DeserializationFeature;
+import jakarta.json.Json;
+import jakarta.ws.rs.ProcessingException;
+import jakarta.ws.rs.client.Client;
+import jakarta.ws.rs.client.WebTarget;
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.UriBuilder;
 
 public class NoSkEAPITest {
     private static final Logger LOGGER = LogManager.getLogger(NoSkEAPITest.class);

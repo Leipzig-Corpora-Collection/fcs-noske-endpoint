@@ -1,7 +1,5 @@
 package de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.query;
 
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
 import org.z3950.zing.cql.CQLAndNode;
 import org.z3950.zing.cql.CQLBooleanNode;
 import org.z3950.zing.cql.CQLNode;
@@ -10,8 +8,6 @@ import org.z3950.zing.cql.CQLTermNode;
 
 import eu.clarin.sru.server.SRUConstants;
 import eu.clarin.sru.server.SRUException;
-import eu.clarin.sru.server.fcs.Constants;
-import eu.clarin.sru.server.fcs.parser.QueryParserException;
 
 /**
  * Query converter from CQL (BASIC search) to SketchEngine CQL.
@@ -19,7 +15,6 @@ import eu.clarin.sru.server.fcs.parser.QueryParserException;
  * no other CQL features with the FCS BASIC search capability.
  */
 public class CQLtoNoSkECQLConverter {
-    private static final Logger LOGGER = LogManager.getLogger(CQLtoNoSkECQLConverter.class);
 
     /**
      * Convert a FCS basic search CQL query into a (No)SketchEngine CQL (CQP) query.

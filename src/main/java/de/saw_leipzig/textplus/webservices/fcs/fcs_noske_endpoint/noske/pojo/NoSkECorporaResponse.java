@@ -31,12 +31,17 @@ public class NoSkECorporaResponse extends NoSkEResponse {
         public String created; // null
         public String compilation_status;
 
+        public String handle; // null (if not available)
+        public String fcsrefs; // null (if not available, might only be at corp_info level)
+        public String fcsinfos; // null (if not available)
+
         @Override
         public String toString() {
             return "Corpus [corpname=" + corpname + ", language_id=" + language_id + ", language_name="
-                    + language_name + ", name=" + name + ", info=" + info + ", sizes=" + sizes +
-                    ", id=" + id + ", owner_id=" + owner_id + ", owner_name=" + owner_name + ", tagset_id=" +
-                    tagset_id + ", created=" + created + ", compilation_status=" + compilation_status
+                    + language_name + ", name=" + name + ", info=" + info + ", sizes=" + sizes + ", id=" + id
+                    + ", owner_id=" + owner_id + ", owner_name=" + owner_name + ", tagset_id=" + tagset_id
+                    + ", created=" + created + ", compilation_status=" + compilation_status + ", handle=" + handle
+                    + ", fcsrefs=" + fcsrefs + ", fcsinfos=" + fcsinfos
 
                     // + ", sketch_grammar_id=" + sketch_grammar_id + ", term_grammar_id=" +
                     // term_grammar_id + ", _is_sgdev=" + _is_sgdev + ", is_featured=" + is_featured
@@ -68,6 +73,9 @@ public class NoSkECorporaResponse extends NoSkEResponse {
             result = prime * result + ((tagset_id == null) ? 0 : tagset_id.hashCode());
             result = prime * result + ((created == null) ? 0 : created.hashCode());
             result = prime * result + ((compilation_status == null) ? 0 : compilation_status.hashCode());
+            result = prime * result + ((handle == null) ? 0 : handle.hashCode());
+            result = prime * result + ((fcsrefs == null) ? 0 : fcsrefs.hashCode());
+            result = prime * result + ((fcsinfos == null) ? 0 : fcsinfos.hashCode());
 
             // @formatter:off
             // result = prime * result + ((sketch_grammar_id == null) ? 0 : sketch_grammar_id.hashCode());
@@ -163,6 +171,21 @@ public class NoSkECorporaResponse extends NoSkEResponse {
                 if (other.compilation_status != null)
                     return false;
             } else if (!compilation_status.equals(other.compilation_status))
+                return false;
+            if (handle == null) {
+                if (other.handle != null)
+                    return false;
+            } else if (!handle.equals(other.handle))
+                return false;
+            if (fcsrefs == null) {
+                if (other.fcsrefs != null)
+                    return false;
+            } else if (!fcsrefs.equals(other.fcsrefs))
+                return false;
+            if (fcsinfos == null) {
+                if (other.fcsinfos != null)
+                    return false;
+            } else if (!fcsinfos.equals(other.fcsinfos))
                 return false;
 
             // @formatter:off

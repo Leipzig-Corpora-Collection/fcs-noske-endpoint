@@ -21,21 +21,17 @@ import org.glassfish.jersey.logging.LoggingFeature;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.exc.UnrecognizedPropertyException;
 
 import de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.noske.pojo.NoSkEConcordanceResponse;
 import de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.noske.pojo.NoSkECorporaResponse;
 import de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.noske.pojo.NoSkECorpusInfoResponse;
-import de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.noske.pojo.NoSkEErrorResponse;
 import de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.noske.pojo.NoSkEResponse;
 import de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.noske.pojo.NoSkEViewResponse;
 import jakarta.json.Json;
-import jakarta.ws.rs.ProcessingException;
 import jakarta.ws.rs.client.Client;
 import jakarta.ws.rs.client.ClientBuilder;
 import jakarta.ws.rs.client.WebTarget;
 import jakarta.ws.rs.core.MediaType;
-import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.UriBuilder;
 
 public class NoSkeAPI {
@@ -100,6 +96,7 @@ public class NoSkeAPI {
         return client.target(baseUri)
                 .path("corp_info")
                 .queryParam("corpname", corpname)
+                // we need structure info to see if there are sentences `<s/>` or not
                 .queryParam("struct_attr_stats", 1)
                 .queryParam("subcorpora", 1)
                 .request()
@@ -147,33 +144,51 @@ public class NoSkeAPI {
                 .get(NoSkEConcordanceResponse.class);
     }
 
-    public NoSkEViewResponse concordance(String corpname, String query, String[] attrs, boolean complete, int size,
-            int offset) {
+    public NoSkEViewResponse concordanceWithPages(String corpname, String query, String[] attrs, String refs,
+            boolean complete, int pageNr, int pageSize, boolean hasSentences) {
         // validation
-        if (offset <= 0) {
-            offset = 1;
+        if (pageNr <= 0) {
+            pageNr = 1;
         }
-        if (size < 1) {
-            size = 20;
+        if (pageSize < 1) {
+            pageSize = 20;
         }
 
         WebTarget target = client.target(baseUri)
                 .path("view")
                 .queryParam("corpname", corpname)
-                .queryParam("q", query) // NOTE: or as json?
-                // line attributes (e.g., sentence id, ...)
-                .queryParam("refs", "=s.id,=s.date,=s.source")
-                // borders left and right context
-                .queryParam("viewmode", "sen")
-                // .queryParam("kwicleftctx", "-1:s") // default 40# (characters)
-                // .queryParam("kwicrightctx", "1:s")
-                // .queryParam("senleftctx", "-1:s") // default, in "sen" mode
-                // .queryParam("senrightctx", "1:s") // default, in "sen" mode
+                // NOTE: or as json?
+                // we need to use templates to properly escape `{a,b}` repeat-instructions from
+                // FCS-QL / NSE CQL
+                .queryParam("q", "{query}")
+                .resolveTemplate("query", query)
                 // structures?
                 .queryParam("structs", "s,g") // doc,p
                 // window/batch
-                .queryParam("fromp", offset)
-                .queryParam("pagesize", size);
+                .queryParam("fromp", pageNr)
+                .queryParam("pagesize", pageSize);
+
+        // borders left and right context
+        if (!hasSentences) {
+            target = target
+                    // 10 tokens left and right in sen(tence) view mode
+                    .queryParam("viewmode", "sen")
+                    .queryParam("senleftctx", "-10")
+                    .queryParam("senrightctx", "10");
+        } else {
+            target = target
+                    .queryParam("viewmode", "sen");
+            // .queryParam("kwicleftctx", "-1:s") // default 40# (characters)
+            // .queryParam("kwicrightctx", "1:s")
+            // .queryParam("senleftctx", "-1:s") // default, in "sen" mode
+            // .queryParam("senrightctx", "1:s") // default, in "sen" mode
+        }
+
+        if (refs != null) {
+            target = target
+                    // line attributes (e.g., sentence id, ...)
+                    .queryParam("refs", refs);
+        }
 
         if (attrs != null && attrs.length >= 1) {
             // will tokenize (if more than one)
@@ -189,6 +204,8 @@ public class NoSkeAPI {
             // --> exact total result count?
             target = target.queryParam("asyn", 0);
         }
+
+        LOGGER.debug("NoSkE-Concordance-URI: {}", target.getUri());
 
         // NOTE: test to parse error response
         // @formatter:off
@@ -216,15 +233,95 @@ public class NoSkeAPI {
         return target.request()
                 .accept(MediaType.APPLICATION_JSON)
                 .get(NoSkEViewResponse.class);
-
     }
 
-    public NoSkEViewResponse concordanceSimple(String corpname, String query, int size, int offset) {
-        return concordance(corpname, query, null, false, size, offset);
+    public NoSkEViewResponse concordance(String corpname, String query, String[] attrs, String refs, boolean complete,
+            int maximumRecords, int startRecord, boolean hasSentences) {
+        // validation
+        if (startRecord <= 0) {
+            startRecord = 1;
+        }
+        if (maximumRecords < 1) {
+            maximumRecords = 20;
+        }
+
+        // NOTE: NoSkE API works with pages
+        // we request a bit more to fit the requested window and then trim results to
+        // fit the startRecord and maximumRecords parameters
+        int pageSize = computePageSize(maximumRecords, startRecord);
+        int pageNr = computePageNr(maximumRecords, startRecord, pageSize);
+        int discardBefore = startRecord - ((pageNr - 1) * pageSize + 1);
+        int discardAfter = (pageNr * pageSize) - (startRecord + maximumRecords - 1);
+        LOGGER.debug(
+                "Search window: startRecord:{}, maximumRecords:{} [{}-{}] --> NSE pageSize:{} pageNr:{} [{}-{}] (discard {}, {})",
+                startRecord, maximumRecords, startRecord, startRecord + maximumRecords - 1, pageSize, pageNr,
+                (pageNr - 1) * pageSize + 1, pageNr * pageSize, discardBefore, discardAfter);
+
+        NoSkEViewResponse concResult = concordanceWithPages(corpname, query, attrs, refs, complete, pageNr, pageSize,
+                hasSentences);
+
+        if (concResult != null && concResult.Lines != null && !concResult.Lines.isEmpty()) {
+            concResult.Lines = concResult.Lines.subList(Math.min(concResult.Lines.size() - 1, discardBefore),
+                    Math.min(concResult.Lines.size(), pageSize - discardAfter));
+        }
+
+        return concResult;
     }
 
-    public NoSkEViewResponse concordanceLayers(String corpname, String query, String[] attrs, int size, int offset) {
-        return concordance(corpname, query, attrs, false, size, offset);
+    public NoSkEViewResponse concordanceSimple(String corpname, String query, String refs, int maximumRecords,
+            int startRecord, boolean hasSentences) {
+        return concordance(corpname, query, null, refs, false, maximumRecords, startRecord, hasSentences);
+    }
+
+    public NoSkEViewResponse concordanceSimple(String corpname, String query, String refs, int maximumRecords,
+            int startRecord) {
+        return concordance(corpname, query, null, refs, false, maximumRecords, startRecord, true);
+    }
+
+    public NoSkEViewResponse concordanceSimple(String corpname, String query, int maximumRecords, int startRecord) {
+        return concordance(corpname, query, null, "?,=s.id,=s.date,=s.source", false, maximumRecords, startRecord,
+                true);
+    }
+
+    public NoSkEViewResponse concordanceLayers(String corpname, String query, String[] attrs, String refs,
+            int maximumRecords, int startRecord, boolean hasSentences) {
+        return concordance(corpname, query, attrs, refs, false, maximumRecords, startRecord, hasSentences);
+    }
+
+    public NoSkEViewResponse concordanceLayers(String corpname, String query, String[] attrs, String refs,
+            int maximumRecords, int startRecord) {
+        return concordance(corpname, query, attrs, refs, false, maximumRecords, startRecord, true);
+    }
+
+    protected int computePageSize(int maximumRecords, int startRecord) {
+        // easy conditions
+        if ((startRecord - 1) % maximumRecords == 0) {
+            return maximumRecords;
+        }
+        if ((startRecord - 1) < maximumRecords) {
+            return startRecord - 1 + maximumRecords;
+        }
+        // trial by loop
+        for (int pageSize = maximumRecords + 1; pageSize < Math.max(1000, 3 * maximumRecords + 1); pageSize++) {
+            int pageNr = computePageNr(maximumRecords, startRecord, pageSize);
+            if (((pageNr - 1) * pageSize) >= startRecord) {
+                continue;
+            }
+            if ((pageNr * pageSize) < startRecord) {
+                continue;
+            }
+            if ((pageNr * pageSize) < (startRecord + maximumRecords - 1)) {
+                continue;
+            }
+            return pageSize;
+
+        }
+        LOGGER.warn("Unable to compute NSE pagesize for startRecord={} maximumRecords={}", startRecord, maximumRecords);
+        return maximumRecords;
+    }
+
+    protected int computePageNr(int maximumRecords, int startRecord, int pageSize) {
+        return (startRecord + pageSize - 1) / pageSize;
     }
 
     // ---------------------------------------------------------------------

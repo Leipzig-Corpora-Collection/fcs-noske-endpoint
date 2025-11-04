@@ -234,7 +234,8 @@ public class NoSkESRUFCSSearchResultSet extends SRUSearchResultSet {
         MyResults.ResultEntry result = results.getResults().get(currentRecordCursor);
 
         XMLStreamWriterHelper.writeStartResource(writer, results.getPid(), null);
-        XMLStreamWriterHelper.writeStartResourceFragment(writer, null, result.landingpage);
+        XMLStreamWriterHelper.writeStartResourceFragment(writer,
+                (result.sid != null && result.sid.contains(":") ? result.sid : null), result.landingpage);
 
         if (result instanceof MyResults.LayerResultEntry) {
             MyResults.LayerResultEntry layerResult = (MyResults.LayerResultEntry) result;
@@ -242,10 +243,12 @@ public class NoSkESRUFCSSearchResultSet extends SRUSearchResultSet {
             Map<String, URI> layerIds = new HashMap<>() {
                 {
                     for (String attr : layerAttrs) {
-                        put(attr, URI.create(LAYER_PREFIX + attr));
+                        // NOTE: general assumption that "-" in FCS corresponds to "_" in NoSkE
+                        put(attr.replaceAll("-", "_"), URI.create(LAYER_PREFIX + attr));
                     }
                 }
             };
+            // LOGGER.debug("layerIds: {}", layerIds);
             URI wordLayerId = layerIds.get("word");
 
             AdvancedDataViewWriter helper = new AdvancedDataViewWriter(AdvancedDataViewWriter.Unit.ITEM);

@@ -21,6 +21,6 @@ RUN java -jar $JETTY_HOME/start.jar --add-modules=plus
 
 # NOTE: "/work/target/webservices.fcs.fcs_noske_endpoint-1.0-SNAPSHOT.war" might break on version updates,
 #       change to "/work/target/webservices.fcs.fcs_noske_endpoint-*.war" or "/work/target/*.war"
-COPY --from=builder /work/target/webservices.fcs.fcs_noske_endpoint-1.0-SNAPSHOT.war /var/lib/jetty/webapps/ROOT.war
+COPY --from=builder /work/target/webservices.fcs.fcs_noske_endpoint-*.war /var/lib/jetty/webapps/ROOT.war
 
 # ---------------------------------------------------------------------------

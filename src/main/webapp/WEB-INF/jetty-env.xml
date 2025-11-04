@@ -22,4 +22,18 @@
         </Arg>
         <Arg type="boolean">true</Arg>
     </New>
+    <New class="org.eclipse.jetty.plus.jndi.EnvEntry">
+        <Arg>param/FCS_RESOURCES_FROM_NOSKE_WITH_HANDLE_ONLY</Arg>
+        <Arg type="java.lang.Boolean">
+            <Env name="FCS_RESOURCES_FROM_NOSKE_WITH_HANDLE_ONLY" default="true" />
+        </Arg>
+        <Arg type="boolean">true</Arg>
+    </New>
+    <New class="org.eclipse.jetty.plus.jndi.EnvEntry">
+        <Arg>param/FCS_RESOURCES_FROM_NOSKE_UPDATE_CHECK</Arg>
+        <Arg type="java.lang.Boolean">
+            <Env name="FCS_RESOURCES_FROM_NOSKE_UPDATE_CHECK" default="true" />
+        </Arg>
+        <Arg type="boolean">true</Arg>
+    </New>
 </Configure>

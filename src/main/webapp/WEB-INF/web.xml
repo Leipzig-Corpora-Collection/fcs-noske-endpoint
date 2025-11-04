@@ -16,6 +16,26 @@
     </context-param>
     -->
 
+    <!-- Quartz scheduler -->
+    <context-param>
+        <param-name>quartz:shutdown-on-unload</param-name>
+        <param-value>true</param-value>
+    </context-param>
+    <context-param>
+        <param-name>quartz:wait-on-shutdown</param-name>
+        <param-value>false</param-value>
+    </context-param>
+    <context-param>
+        <param-name>quartz:start-on-load</param-name>
+        <param-value>true</param-value>
+    </context-param>
+
+    <listener>
+        <listener-class>
+            org.quartz.ee.servlet.QuartzInitializerListener
+        </listener-class>
+    </listener>
+
     <servlet>
         <display-name>Wortschatz Leipzig SRU/CQL Service (HTTP Interface)</display-name>
         <servlet-name>SRU/CQL</servlet-name>
@@ -61,6 +81,9 @@
             <param-name>eu.clarin.sru.server.database</param-name>
             <param-value>noske-fcs</param-value>
         </init-param>
+
+        <!-- Quartz scheduler -->
+
 
         <load-on-startup>1</load-on-startup>
     </servlet>

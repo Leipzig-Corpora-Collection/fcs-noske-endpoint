@@ -10,6 +10,8 @@ public class NoSkECorpusInfoResponse extends NoSkEResponse {
     public String lang;
     public String infohref;
     public String info;
+    public String handle; // null (if not available)
+    public String fcsrefs; // null (if not available)
     public String encoding;
     public String tagsetdoc;
     public String errsetdoc; // ?
@@ -18,9 +20,11 @@ public class NoSkECorpusInfoResponse extends NoSkEResponse {
     public boolean righttoleft;
     public CorpusSizes sizes;
     public List<Attribute> attributes;
-    // /**
-    //  * Available <em>structures</em> or <em>tags</em> in the corpus. Structures like <code>s</code> (sentence), <code>g</code> (glue), <code>doc</code> (document).
-    //  */
+    /**
+     * Available <em>structures</em> or <em>tags</em> in the corpus. Structures
+     * like <code>s</code> (sentence), <code>g</code> (glue), <code>doc</code>
+     * (document).
+     */
     public List<Structure> structures;
     public List<Object> subcorpora;
 
@@ -68,10 +72,10 @@ public class NoSkECorpusInfoResponse extends NoSkEResponse {
     @Override
     public String toString() {
         return "NoSkECorpusInfoResponse [name=" + name + ", lang=" + lang + ", infohref=" + infohref + ", info="
-                + info + ", encoding=" + encoding + ", tagsetdoc=" + tagsetdoc + ", errsetdoc=" + errsetdoc
-                + ", compiled=" + compiled + ", is_error_corpus=" + is_error_corpus + ", righttoleft=" + righttoleft
-                + ", sizes=" + sizes + ", attributes=" + attributes + ", structures=" + structures + ", subcorpora="
-                + subcorpora
+                + info + ", handle=" + handle + ", fcsrefs=" + fcsrefs + ", encoding=" + encoding
+                + ", tagsetdoc=" + tagsetdoc + ", errsetdoc=" + errsetdoc + ", compiled=" + compiled
+                + ", is_error_corpus=" + is_error_corpus + ", righttoleft=" + righttoleft + ", sizes=" + sizes
+                + ", attributes=" + attributes + ", structures=" + structures + ", subcorpora=" + subcorpora
 
                 // + ", wposlist=" + wposlist + ", lposlist=" + lposlist + ", wsposlist=" +
                 // wsposlist + ", structs=" + structs + ", defaultattr=" + defaultattr + ",

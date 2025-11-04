@@ -11,8 +11,11 @@ import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -25,10 +28,26 @@ import javax.servlet.ServletContext;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.quartz.DateBuilder;
+import org.quartz.DateBuilder.IntervalUnit;
+import org.quartz.Job;
+import org.quartz.JobBuilder;
+import org.quartz.JobDataMap;
+import org.quartz.JobDetail;
+import org.quartz.JobExecutionContext;
+import org.quartz.JobExecutionException;
+import org.quartz.Scheduler;
+import org.quartz.SchedulerException;
+import org.quartz.SimpleScheduleBuilder;
+import org.quartz.Trigger;
+import org.quartz.TriggerBuilder;
+import org.quartz.ee.servlet.QuartzInitializerListener;
+import org.quartz.impl.StdSchedulerFactory;
+import org.quartz.impl.matchers.GroupMatcher;
 
+import de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.noske.FCSMetadata;
 import de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.noske.NoSkeAPI;
 import de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.noske.pojo.NoSkECorporaResponse;
-import de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.noske.pojo.NoSkECorporaResponse.Corpus;
 import de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.noske.pojo.NoSkECorpusInfoResponse;
 import de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.noske.pojo.NoSkEViewResponse;
 import de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.query.CQLtoNoSkECQLConverter;
@@ -71,22 +90,53 @@ public class NoSkESRUFCSEndpointSearchEngine extends SimpleEndpointSearchEngineB
     // endpoint-description.xml file at another location
     private static final String RESOURCE_INVENTORY_URL = "de.saw_leipzig.textplus.webservices.fcs.fcs_noske_endpoint.resourceInventoryURL";
 
-    private static NoSkeAPI api;
+    private NoSkeAPI api;
+    private Scheduler scheduler;
 
-    /**
-     * Endpoint Description with resources, capabilities etc.
-     */
-    private static EndpointDescription endpointDescription;
+    private static final String QUARTZ_KEY_API = "quartz.my.api";
+    private static final String QUARTZ_KEY_HANDLEONLY = "quartz.my.handleOnly";
+    private static final String QUARTZ_KEY_PIDS = "quartz.my.pids";
+    private static final String QUARTZ_KEY_SEARCHENGINE = "quartz.my.searchEngine";
+
     /**
      * List of our endpoint's resources (identified by PID Strings)
      */
-    private static List<String> pids;
+    private List<String> pids;
+    /**
+     * Mapping of resource PID to corpus name (for NoSketchEngine).
+     */
+    private Map<String, String> pid2name;
     /**
      * Our default corpus if SRU requests do no explicitely request a resource
      * by PID with the <code>x-fcs-context</code> parameter.
      * Must not be <code>null</code>!
      */
-    private static String defaultCorpusId = null;
+    private String defaultCorpusId = null;
+
+    /**
+     * Mapping of NSE corpus name to optional FCS Refs attribute.
+     */
+    private Map<String, String> corpus2Refs;
+
+    /**
+     * List of NSE corpus name that do not have sentence `&lt;s/&gt;` structures.
+     */
+    private List<String> corporaWithoutSentenceStruct;
+
+    /**
+     * URL template to refer to a single sentence using the sentence id.
+     * For automatic link generation of LCC/WS corpora.
+     */
+    // NOTE: might be able to chain two queries together?
+    // first the filter query with the sentence id and then the original query for
+    // the result set?
+    private String lccNSESearchResultPageForSID = "{{APIURL}}"
+            + "#concordance?corpname={{CORPUS}}&viewmode=sen&showresults=1"
+            + "&operations=%5B%7B%22name%22%3A%22cql%22%2C%22arg%22%3A"
+            + "%22%3Cs%20id%3D%5C%22{{SID}}%5C%22%20%2F%3E%22%2C"
+            + "%22query%22%3A%7B%22queryselector%22%3A%22cqlrow%22%2C"
+            + "%22cql%22%3A%22%3Cs%20id%3D%5C%22{{SID}}%5C%22%20%2F%3E%22%2C"
+            + "%22default_attr%22%3A%22word%22%7D%7D%5D";
 
     // ---------------------------------------------------------------------
     // params
@@ -149,6 +199,10 @@ public class NoSkESRUFCSEndpointSearchEngine extends SimpleEndpointSearchEngineB
         String noskeUri = getEnvParam("NOSKE_API_URI");
         final URI baseUri = UriBuilder.fromUri(noskeUri).build();
 
+        // pre-fill template link with correct NSE host
+        lccNSESearchResultPageForSID = lccNSESearchResultPageForSID.replace("{{APIURL}}",
+                baseUri.resolve("/").toString());
+
         try {
             return new NoSkeAPI(baseUri.toString(), false, true);
         } catch (KeyManagementException | NoSuchAlgorithmException e) {
@@ -210,6 +264,55 @@ public class NoSkESRUFCSEndpointSearchEngine extends SimpleEndpointSearchEngineB
         NoSkECorporaResponse corporaResponse = api.corpora();
         LOGGER.debug("Got {} corpora from NoSkE", corporaResponse.data.size());
 
+        List<NoSkECorporaResponse.Corpus> corpora = corporaResponse.data;
+        if (getEnvParamBoolean("FCS_RESOURCES_FROM_NOSKE_WITH_HANDLE_ONLY")) {
+            corpora = corporaResponse.data.stream()
+                    .filter(c -> c.handle != null && !c.handle.isBlank())
+                    .collect(Collectors.toList());
+            LOGGER.debug("Filtered to {} corpora from NoSkE with valid handles.", corpora.size());
+        }
+        // NOTE: limit for testing only
+        // corpora = corpora.stream()
+        // .filter(c -> c.name.startsWith("deu"))
+        // .limit(10)
+        // .collect(Collectors.toList());
+
+        final List<NoSkECorporaResponse.Corpus> corporaForED = corpora.stream()
+                .sorted(Comparator.comparing(corpus -> corpus.corpname))
+                .collect(Collectors.toList());
+
+        // store mapping of pid to name (for later NSE queries)
+        pid2name = new HashMap<>() {
+            {
+                corporaForED.stream().forEach(new Consumer<NoSkECorporaResponse.Corpus>() {
+                    @Override
+                    public void accept(NoSkECorporaResponse.Corpus corpus) {
+                        if (corpus.handle != null && !corpus.handle.isBlank()) {
+                            put(corpus.handle, corpus.corpname);
+                        }
+                    }
+                });
+            }
+        };
+
+        // store mapping of corpus name to fcs refs (for later NSE queries)
+        // fallback, should not yet be exposed on this general level
+        corpus2Refs = new HashMap<>() {
+            {
+                corporaForED.stream().forEach(new Consumer<NoSkECorporaResponse.Corpus>() {
+                    @Override
+                    public void accept(NoSkECorporaResponse.Corpus corpus) {
+                        if (corpus.fcsrefs != null && !corpus.fcsrefs.isBlank()) {
+                            put(corpus.corpname, corpus.fcsrefs);
+                        }
+                    }
+                });
+            }
+        };
+
+        // store list of corpus names that do not have sentence structures
+        corporaWithoutSentenceStruct = new ArrayList<>();
+
         // create endpoint description
         HashMap<String, DataView> dataViews = new HashMap<>(2) {
             {
@@ -217,14 +320,18 @@ public class NoSkESRUFCSEndpointSearchEngine extends SimpleEndpointSearchEngineB
                 put("adv", new DataView("adv", "application/x-clarin-fcs-adv+xml", DeliveryPolicy.SEND_BY_DEFAULT));
             }
         };
-        HashMap<String, Layer> layers = new HashMap<>() {
+        Map<String, Layer> layers = new LinkedHashMap<>() {
             {
+                // NOTE: general assumption that "-" in FCS corresponds to "_" in NoSkE
                 put("word", new Layer("word", URI.create(LAYER_PREFIX + "word"), "text"));
-                put("lc", new Layer("lc", URI.create(LAYER_PREFIX + "lc"), "text"));
+                put("lc", new Layer("lc", URI.create(LAYER_PREFIX + "lc"), "text", Layer.ContentEncoding.VALUE, "lc",
+                        null, null));
                 put("lemma", new Layer("lemma", URI.create(LAYER_PREFIX + "lemma"), "lemma"));
-                put("lemma_lc", new Layer("lemma_lc", URI.create(LAYER_PREFIX + "lemma_lc"), "lemma"));
+                put("lemma_lc", new Layer("lemma-lc", URI.create(LAYER_PREFIX + "lemma-lc"), "lemma",
+                        Layer.ContentEncoding.VALUE, "lc", null, null));
                 put("pos", new Layer("pos", URI.create(LAYER_PREFIX + "pos"), "pos"));
-                put("pos_ud17", new Layer("pos_ud17", URI.create(LAYER_PREFIX + "pos_ud17"), "pos"));
+                put("pos_ud17", new Layer("pos-ud17", URI.create(LAYER_PREFIX + "pos-ud17"), "pos",
+                        Layer.ContentEncoding.VALUE, "ud17", null, null));
             }
         };
         return new SimpleEndpointDescription(
@@ -237,16 +344,13 @@ public class NoSkESRUFCSEndpointSearchEngine extends SimpleEndpointSearchEngineB
                 },
                 new ArrayList<>(dataViews.values()),
                 new ArrayList<>(layers.values()),
+                null,
                 new ArrayList<>() {
                     {
-                        corporaResponse.data.stream()
-                                // NOTE: limit for testing only
-                                // .filter(c -> c.name.startsWith("deu"))
-                                // .limit(10)
-                                .sorted(Comparator.comparing(corpus -> corpus.corpname))
+                        corporaForED.stream()
                                 .forEach(new Consumer<NoSkECorporaResponse.Corpus>() {
                                     @Override
-                                    public void accept(Corpus corpus) {
+                                    public void accept(NoSkECorporaResponse.Corpus corpus) {
                                         final NoSkECorpusInfoResponse corpusInfoResponse = api
                                                 .corpInfo(corpus.corpname);
                                         final List<String> attributes = corpusInfoResponse.attributes.stream()
@@ -261,33 +365,64 @@ public class NoSkESRUFCSEndpointSearchEngine extends SimpleEndpointSearchEngineB
                                                 LOGGER.warn(
                                                         "No ISO639 language code found for language '{}' in corpus '{}'!",
                                                         corpus.language_name, corpus.corpname);
-                                                langCode = corpus.name
-                                                        .substring(corpus.name.lastIndexOf('/') + 1)
+                                                langCode = corpus.corpname
+                                                        .substring(corpus.corpname.lastIndexOf('/') + 1)
                                                         .substring(0, 3);
                                             }
                                         }
 
+                                        // store mapping of corpus name to fcs refs (for later NSE queries)
+                                        // might only be specified here if not on '/corpora' endpoint
+                                        if (corpusInfoResponse.fcsrefs != null
+                                                && !corpusInfoResponse.fcsrefs.isBlank()) {
+                                            corpus2Refs.put(corpus.corpname, corpusInfoResponse.fcsrefs);
+                                        }
+
+                                        // check whether the corpus has sentence `<s/>` structures annotated or not
+                                        // if not, we need to store the corpname to later request more context for
+                                        // collocations/kwics
+                                        if (corpusInfoResponse.structures == null || !corpusInfoResponse.structures
+                                                .stream().filter(s -> "s".equalsIgnoreCase(s.name)).findAny()
+                                                .isPresent()) {
+                                            corporaWithoutSentenceStruct.add(corpus.corpname);
+                                        }
+
+                                        String pid = corpus.handle;
+                                        if (pid == null || pid.isBlank()) {
+                                            pid = RESOURCE_PREFIX + corpus.corpname;
+                                        }
+
+                                        FCSMetadata meta = FCSMetadata.parseFromJSONString(corpus.fcsinfos, "en");
+                                        // fallback values if some fields were not set
+                                        if (meta.title == null) {
+                                            meta.title = Collections.singletonMap("en", corpus.name);
+                                        }
+                                        if (meta.description == null) {
+                                            meta.description = Collections.singletonMap("en", corpus.info);
+                                        }
+                                        if (meta.landingpage == null) {
+                                            meta.landingpage = corpusInfoResponse.infohref;
+                                        }
+
                                         add(new ResourceInfo(
-                                                RESOURCE_PREFIX + corpus.corpname,
-                                                new HashMap<>() {
-                                                    {
-                                                        put("en", corpus.name);
-                                                    }
-                                                },
-                                                new HashMap<>() {
-                                                    {
-                                                        put("en", corpus.info);
-                                                    }
-                                                },
-                                                corpusInfoResponse.infohref,
+                                                pid,
+                                                meta.title,
+                                                meta.description,
+                                                meta.institution,
+                                                meta.landingpage,
                                                 List.of(langCode),
                                                 new ArrayList<>(dataViews.values()),
                                                 new ArrayList<>() {
                                                     {
+                                                        // NOTE: general assumption that "-" in FCS corresponds to "_"
+                                                        // in NoSkE
                                                         add(layers.get("word"));
                                                         add(layers.get("lc"));
                                                         if (attributes.contains("pos")) {
                                                             add(layers.get("pos"));
+                                                        }
+                                                        if (attributes.contains("pos_ud17")) {
+                                                            add(layers.get("pos_ud17"));
                                                         }
                                                         if (attributes.contains("lemma")) {
                                                             add(layers.get("lemma"));
@@ -366,6 +501,99 @@ public class NoSkESRUFCSEndpointSearchEngine extends SimpleEndpointSearchEngineB
     }
 
     // ---------------------------------------------------------------------
+
+    // NOTE: only checks for changed PIDs (not changes in metadata of resources)!
+    public static class NSEUpdateCheckerJob implements Job {
+        @Override
+        public void execute(JobExecutionContext context) throws JobExecutionException {
+            JobDataMap data = context.getMergedJobDataMap();
+            LOGGER.info("Run job check ... {}", data);
+
+            NoSkeAPI api = (NoSkeAPI) data.get(QUARTZ_KEY_API);
+            boolean handleOnly = data.getBoolean(QUARTZ_KEY_HANDLEONLY);
+            @SuppressWarnings("unchecked")
+            List<String> pids = (List<String>) data.get(QUARTZ_KEY_PIDS);
+            NoSkESRUFCSEndpointSearchEngine sruFcsThis = (NoSkESRUFCSEndpointSearchEngine) data
+                    .get(QUARTZ_KEY_SEARCHENGINE);
+
+            NoSkECorporaResponse corporaResponse = api.corpora();
+
+            Set<String> newPids = corporaResponse.data.stream()
+                    .filter(corpus -> (handleOnly) ? (corpus.handle != null && !corpus.handle.isBlank()) : true)
+                    .map(corpus -> {
+                        String pid = corpus.handle;
+                        if (pid == null || pid.isBlank()) {
+                            pid = RESOURCE_PREFIX + corpus.corpname;
+                        }
+                        return pid;
+                    }).collect(Collectors.toSet());
+
+            Set<String> oldPids = new HashSet<>(pids);
+
+            if (!(oldPids.containsAll(newPids) && newPids.containsAll(oldPids))) {
+                Set<String> pids2add = new HashSet<>(newPids);
+                pids2add.removeAll(oldPids);
+                Set<String> pids2remove = new HashSet<>(oldPids);
+                pids2remove.removeAll(newPids);
+                LOGGER.info("Update required! --> pids to add: {}, pids to remove: {}", pids2add, pids2remove);
+
+                sruFcsThis.endpointDescription = sruFcsThis.buildEndpointDescriptionFromNoSkE();
+                try {
+                    sruFcsThis.pids = sruFcsThis.getResourcesFromEndpointDescription(sruFcsThis.endpointDescription);
+                } catch (SRUException e) {
+                    LOGGER.debug("SRU Error while updating pids?", e);
+                    sruFcsThis.pids = new ArrayList<>(newPids);
+                }
+            } else {
+                LOGGER.debug("No change of PIDs detected, no update required.");
+            }
+
+        }
+    }
+
+    protected void createUpdateTask(ServletContext context, SRUServerConfig config, Map<String, String> params)
+            throws SRUConfigException {
+        StdSchedulerFactory factory = (StdSchedulerFactory) context
+                .getAttribute(QuartzInitializerListener.QUARTZ_FACTORY_KEY);
+
+        try {
+            scheduler = factory.getScheduler();
+        } catch (SchedulerException e) {
+            throw new SRUConfigException("Error setting task scheduler", e);
+        }
+
+        JobDataMap data = new JobDataMap();
+        data.put(QUARTZ_KEY_API, api);
+        data.put(QUARTZ_KEY_HANDLEONLY, getEnvParamBoolean("FCS_RESOURCES_FROM_NOSKE_WITH_HANDLE_ONLY"));
+        data.put(QUARTZ_KEY_PIDS, pids);
+        data.put(QUARTZ_KEY_SEARCHENGINE, this);
+
+        JobDetail job = JobBuilder.newJob()
+                .withIdentity("NSE-Update-Checker")
+                .ofType(NSEUpdateCheckerJob.class)
+                .setJobData(data)
+                .build();
+
+        Trigger trigger = TriggerBuilder.newTrigger()
+                .withIdentity("NSE-Update-Checker")
+                .withSchedule(SimpleScheduleBuilder.repeatHourlyForever(1))
+                .startAt(DateBuilder.futureDate(1, IntervalUnit.HOUR))
+                .build();
+
+        try {
+            scheduler.scheduleJob(job, trigger);
+        } catch (SchedulerException e) {
+            throw new SRUConfigException("Error adding task to task scheduler", e);
+        }
+
+        try {
+            scheduler.start();
+        } catch (SchedulerException e) {
+            throw new SRUConfigException("Error starting task scheduler", e);
+        }
+    }
+
+    // ---------------------------------------------------------------------
     // init
 
     /**
@@ -423,6 +651,32 @@ public class NoSkESRUFCSEndpointSearchEngine extends SimpleEndpointSearchEngineB
         if (defaultCorpusId == null || !pids.contains(defaultCorpusId)) {
             throw new SRUConfigException("Parameter 'DEFAULT_RESOURCE_PID' contains unknown resource pid!");
         }
+
+        /* setup NSE update checker */
+        if (getEnvParamBoolean("FCS_RESOURCES_FROM_NOSKE")
+                && getEnvParamBoolean("FCS_RESOURCES_FROM_NOSKE_UPDATE_CHECK")) {
+            createUpdateTask(context, config, params);
+            LOGGER.info("Update job scheduled.");
+
+            try {
+                LOGGER.debug("Quartz Triggers: {}", scheduler.getTriggerKeys(GroupMatcher.anyGroup()));
+                LOGGER.debug("Quartz Jobs: {}", scheduler.getJobKeys(GroupMatcher.anyGroup()));
+                LOGGER.debug("Quartz Data: {}", scheduler.getMetaData());
+            } catch (SchedulerException e) {
+                LOGGER.warn("Something unexpected happened.", e);
+            }
+        }
+    }
+
+    @Override
+    protected void doDestroy() {
+        LOGGER.info("SRUServlet::doDestroy");
+
+        try {
+            scheduler.shutdown();
+        } catch (SchedulerException e) {
+            LOGGER.debug("Error cleaning up scheduler", e);
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -439,6 +693,7 @@ public class NoSkESRUFCSEndpointSearchEngine extends SimpleEndpointSearchEngineB
             throws SRUException {
         /* validate params */
         List<String> pids = parsePids(request);
+        // TODO: map pids to noske corpora?
         pids = checkPids(pids, diagnostics);
         LOGGER.debug("Search restricted to PIDs: {}", pids);
         /* we restrict our search to the first PID */
@@ -446,8 +701,13 @@ public class NoSkESRUFCSEndpointSearchEngine extends SimpleEndpointSearchEngineB
         LOGGER.debug("Search restricted to first PID: {}", pid);
 
         /* get corpus/resource info from pid */
-        final String corpname = pid.substring(RESOURCE_PREFIX.length());
         final ResourceInfo ri = getResourceFromEndpointDescriptionByPID(endpointDescription, pid);
+        final String corpname;
+        if (pid2name != null && pid2name.containsKey(pid)) {
+            corpname = pid2name.get(pid);
+        } else {
+            corpname = pid.substring(RESOURCE_PREFIX.length());
+        }
 
         /* check against search query types that are not supported */
         final boolean hasADVCap = ri.getAvailableDataViews().stream()
@@ -466,9 +726,21 @@ public class NoSkESRUFCSEndpointSearchEngine extends SimpleEndpointSearchEngineB
         LOGGER.debug("Search requested dataviews: {}", dataviews);
 
         /* attributes for ADVANCED/layers */
-        final String[] attrs = ri.getAvailableLayers().stream().map(l -> l.getId()).collect(Collectors.toList())
-                .toArray(new String[] {});
-        LOGGER.debug("Layer attributes: {}", Arrays.asList(attrs));
+        final Map<String, String> attrsWithTypes = ri.getAvailableLayers().stream()
+                .collect(Collectors.toMap(l -> l.getId(), l -> l.getType()));
+        LOGGER.debug("Layer attributes with types (FCS): {}", attrsWithTypes);
+        final String[] attrs = ri.getAvailableLayers().stream().map(l -> l.getId()).map(v -> v.replaceAll("-", "_"))
+                .collect(Collectors.toList()).toArray(new String[] {});
+        LOGGER.debug("Layer attributes (NoSkE): {}", Arrays.asList(attrs));
+
+        final String fcsRefs = corpus2Refs.getOrDefault(corpname, "?,=s.id,=s.date,=s.source");
+        LOGGER.debug("NSE ({}) Line.Refs: {}", corpname, fcsRefs);
+
+        final boolean hasSentences = corporaWithoutSentenceStruct == null
+                || !corporaWithoutSentenceStruct.contains(corpname);
+        if (!hasSentences) {
+            LOGGER.debug("Has no sentence <s/> structures!");
+        }
 
         /* parse and translate query */
         String query = parseQuery(request, pid);
@@ -476,10 +748,8 @@ public class NoSkESRUFCSEndpointSearchEngine extends SimpleEndpointSearchEngineB
         // TODO: add gdex?
         query = "q" + query;
 
-        int startRecord = ((request.getStartRecord() < 1) ? 1 : request.getStartRecord()) - 1;
+        int startRecord = (request.getStartRecord() < 1) ? 1 : request.getStartRecord();
         int maximumRecords = request.getMaximumRecords();
-        // LOGGER.debug("Search window: start:{}, size:{}", startRecord,
-        // maximumRecords);
 
         /*
          * start search (query = query, offset = startRecord, limit = maximumRecords)
@@ -488,7 +758,8 @@ public class NoSkESRUFCSEndpointSearchEngine extends SimpleEndpointSearchEngineB
         if (request.isQueryType(Constants.FCS_QUERY_TYPE_CQL)) {
             // BASIC/CQL/fulltext search
 
-            NoSkEViewResponse concResults = api.concordanceSimple(corpname, query, maximumRecords, startRecord);
+            NoSkEViewResponse concResults = api.concordanceSimple(corpname, query, fcsRefs, maximumRecords, startRecord,
+                    hasSentences);
             // LOGGER.debug("results: {}", concResults);
 
             if (concResults == null || concResults.Lines == null) {
@@ -507,11 +778,19 @@ public class NoSkESRUFCSEndpointSearchEngine extends SimpleEndpointSearchEngineB
                                 .findAny()
                                 .orElse(null);
                         // metadata
-                        entry.sid = line.Refs.get(0);
-                        entry.date = line.Refs.get(1);
-                        entry.url = line.Refs.get(2);
-                        // sid?
-                        entry.landingpage = pid + "#sid=" + entry.sid;
+                        if (line.Refs != null && line.Refs.size() >= 4) {
+                            entry.landingpage = line.Refs.get(0);
+                            entry.sid = line.Refs.get(1);
+                            entry.date = line.Refs.get(2);
+                            entry.url = line.Refs.get(3);
+
+                            if ((entry.landingpage == null || entry.landingpage.isBlank())
+                                    && (entry.sid != null && !entry.sid.isBlank())) {
+                                // build link to NSE result page containing only this result
+                                entry.landingpage = lccNSESearchResultPageForSID.replace("{{CORPUS}}", corpname)
+                                        .replace("{{SID}}", entry.sid);
+                            }
+                        }
                         add(entry);
                     });
                 }
@@ -519,7 +798,8 @@ public class NoSkESRUFCSEndpointSearchEngine extends SimpleEndpointSearchEngineB
         } else if (request.isQueryType(Constants.FCS_QUERY_TYPE_FCS)) {
             // ADVANCED/Layers search/results
 
-            NoSkEViewResponse concResults = api.concordanceLayers(corpname, query, attrs, maximumRecords, startRecord);
+            NoSkEViewResponse concResults = api.concordanceLayers(corpname, query, attrs, fcsRefs, maximumRecords,
+                    startRecord, hasSentences);
             // LOGGER.debug("results: {}", concResults);
 
             if (concResults == null || concResults.Lines == null) {
@@ -535,11 +815,19 @@ public class NoSkESRUFCSEndpointSearchEngine extends SimpleEndpointSearchEngineB
                         entry.kwicTokens = convertNoSkELineTokensToKWICTokens(line.Kwic, attrs);
                         entry.rightTokens = convertNoSkELineTokensToKWICTokens(line.Right, attrs);
                         // metadata
-                        entry.sid = line.Refs.get(0);
-                        entry.date = line.Refs.get(1);
-                        entry.url = line.Refs.get(2);
-                        // sid?
-                        entry.landingpage = pid + "#s.id=" + entry.sid;
+                        if (line.Refs != null && line.Refs.size() >= 4) {
+                            entry.landingpage = line.Refs.get(0);
+                            entry.sid = line.Refs.get(1);
+                            entry.date = line.Refs.get(2);
+                            entry.url = line.Refs.get(3);
+
+                            if ((entry.landingpage == null || entry.landingpage.isBlank())
+                                    && (entry.sid != null && !entry.sid.isBlank())) {
+                                // build link to NSE result page containing only this result
+                                entry.landingpage = lccNSESearchResultPageForSID.replace("{{CORPUS}}", corpname)
+                                        .replace("{{SID}}", entry.sid);
+                            }
+                        }
                         add(entry);
                     });
                 }
@@ -583,7 +871,14 @@ public class NoSkESRUFCSEndpointSearchEngine extends SimpleEndpointSearchEngineB
                         }
                     }
                 });
-        return kwicTokens;
+
+        // NOTE: for results where the string but not the fields are being provided,
+        // filter out and ignore
+        // https://cql.wortschatz-leipzig.de/bonito/run.cgi/view?corpname=bakfj_vol1&q=q%5Bgnd%3D%22140822267%22%5D&refs=%3Ds.id%2C%3Ds.date%2C%3Ds.source&viewmode=sen&structs=s%2Cg&fromp=1&pagesize=12&attr_allpos=all&attrs=word%2Clc%2Cgnd&ctxattrs=word%2Clc%2Cgnd
+        List<Map<String, String>> kwicTokensCleaned = kwicTokens.stream()
+                .filter(t -> t.keySet().containsAll(Set.copyOf(Arrays.asList(corpusAttrs))))
+                .collect(Collectors.toList());
+        return kwicTokensCleaned;
     }
 
     // ---------------------------------------------------------------------
@@ -602,11 +897,7 @@ public class NoSkESRUFCSEndpointSearchEngine extends SimpleEndpointSearchEngineB
      * @see #search(SRUServerConfig, SRURequest, SRUDiagnosticList)
      */
     protected String parseQuery(SRURequest request, String pid) throws SRUException {
-        /* filter search attributes based on supported layers from corpus */
         ResourceInfo ri = getResourceFromEndpointDescriptionByPID(endpointDescription, pid);
-        Set<String> attrs = ri.getAvailableLayers().stream().map(layer -> layer.getId()).collect(Collectors.toSet());
-        attrs.retainAll(Set.of("lc", "lemma_lc"));
-        String[] searchAttrs = attrs.toArray(new String[attrs.size()]);
 
         final String skeCQLQuery;
         if (request.isQueryType(Constants.FCS_QUERY_TYPE_CQL)) {
@@ -616,6 +907,13 @@ public class NoSkESRUFCSEndpointSearchEngine extends SimpleEndpointSearchEngineB
              */
             final CQLQueryParser.CQLQuery q = request.getQuery(CQLQueryParser.CQLQuery.class);
             LOGGER.info("FCS-CQL query: {}", q.getRawQuery());
+
+            /* filter search attributes based on supported layers from corpus */
+            // restrict to those only layers for BASIC/CQL search
+            Set<String> attrs = ri.getAvailableLayers().stream().map(layer -> layer.getId())
+                    .collect(Collectors.toSet());
+            attrs.retainAll(Set.of("lc", "lemma_lc"));
+            final String[] searchAttrs = attrs.toArray(new String[attrs.size()]);
 
             try {
                 skeCQLQuery = CQLtoNoSkECQLConverter.convertCQLtoNoSkECQL(q.getParsedQuery(), searchAttrs);
@@ -637,8 +935,12 @@ public class NoSkESRUFCSEndpointSearchEngine extends SimpleEndpointSearchEngineB
             final FCSQueryParser.FCSQuery q = request.getQuery(FCSQueryParser.FCSQuery.class);
             LOGGER.info("FCS-QL query: {}", q.getRawQuery());
 
+            final Map<String, String> searchAttrs = ri.getAvailableLayers().stream()
+                    .collect(Collectors.toMap(l -> l.getId(), l -> l.getType()));
+
             try {
-                // NOTE: searchAttrs may be required for more complicated conversion?
+                // searchAttrs are required for more complicated conversion (generic layer query
+                // or with prefix)
                 skeCQLQuery = FCSQLtoNoSkECQLConverter.convertFCSQLtoNoSkECQL(q.getParsedQuery(), searchAttrs);
                 LOGGER.debug("SketchEngine query: {}", skeCQLQuery);
             } catch (Exception e) { // TODO: check type?
@@ -729,7 +1031,7 @@ public class NoSkESRUFCSEndpointSearchEngine extends SimpleEndpointSearchEngineB
         // set valid and existing resource PIDs
         List<String> knownPids = new ArrayList<>();
         for (String pid : pids) {
-            if (!NoSkESRUFCSEndpointSearchEngine.pids.contains(pid)) {
+            if (!this.pids.contains(pid)) {
                 // allow only valid resources that can be queried by CQL
                 diagnostics.addDiagnostic(
                         Constants.FCS_DIAGNOSTIC_PERSISTENT_IDENTIFIER_INVALID,
@@ -850,4 +1152,5 @@ public class NoSkESRUFCSEndpointSearchEngine extends SimpleEndpointSearchEngineB
         }
         return allowedDataViews;
     }
+
 }
